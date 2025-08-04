@@ -11,22 +11,41 @@ A simple PyPI (Python Package Index) clone server that supports package upload, 
 - Package versioning
 - RESTful API
 
-## Installation
+## Quick Start
 
 1. Clone the repository
+2. Run the setup script:
+```bash
+chmod +x local-deploy.sh
+./local-deploy.sh
+```
+
+3. Start the server:
+```bash
+./venv/bin/python server.py
+```
+
+4. The server will run on `http://localhost:8080`
+
+## Manual Installation
+
+If you prefer to set up manually:
+
+1. Create virtual environment:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
 2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
-
-1. Start the server:
+3. Start the server:
 ```bash
-python app.py
+python server.py
 ```
-
-2. The server will run on `http://localhost:8080`
 
 ## API Endpoints
 

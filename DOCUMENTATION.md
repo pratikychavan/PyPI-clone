@@ -265,23 +265,6 @@ python3 cli.py user token [--username] [--token-name] [--expires-days]
 
 ## Deployment Options
 
-### Docker
-
-Create a `Dockerfile`:
-
-```dockerfile
-FROM python:3.9-slim
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
-COPY . .
-EXPOSE 8080
-
-CMD ["python3", "server.py"]
-```
-
 ### Systemd Service
 
 Create `/etc/systemd/system/pypi-clone.service`:

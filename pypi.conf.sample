@@ -1,0 +1,22 @@
+[server]
+# Host to bind to
+host = localhost
+
+# Port to bind to
+port = 8080
+
+# Directory to store packages
+data_dir = ./packages
+
+# Enable debug mode
+debug = true
+
+# Secret key for sessions (change in production!)
+secret_key = change-this-in-production
+
+# Maximum file size in bytes (100MB)
+max_file_size = 104857600
+
+[auth]
+# Enable authentication for uploads
+enabled = false

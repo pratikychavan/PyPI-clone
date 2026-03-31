@@ -207,6 +207,36 @@ def api_stats():
     stats = package_manager.get_package_stats()
     return jsonify(stats)
 
+@app.route('/api/pypi-info/<package_name>')
+def api_pypi_info(package_name):
+    """Fetch package metadata from official PyPI (does not download)"""
+    version = request.args.get('version', '').strip() or None
+    try:
+        info = package_manager.fetch_pypi_info(package_name, version)
+        return jsonify(info)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        return jsonify({'error': f'Failed to reach PyPI: {str(e)}'}), 502
+
+@app.route('/api/import', methods=['POST'])
+def import_from_pypi():
+    """Import a package from official PyPI into local index"""
+    data = request.get_json(silent=True) or {}
+    package_name = data.get('package_name', '').strip()
+    version = data.get('version', '').strip() or None
+
+    if not package_name:
+        return jsonify({'error': 'package_name is required'}), 400
+
+    try:
+        result = package_manager.import_from_pypi(package_name, version)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        return jsonify({'error': f'Import failed: {str(e)}'}), 502
+
 # Admin routes (require authentication)
 if config.auth_enabled:
     @app.route('/admin')
@@ -313,6 +343,36 @@ ENHANCED_INDEX_TEMPLATE = """
             display: block; margin: 10px 0; font-family: Monaco, monospace;
         }
         
+        .import-section {
+            margin-bottom: 30px; background: white; padding: 25px;
+            border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .import-section h3 { margin-top: 0; color: #2c3e50; }
+        .import-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+        .import-row input {
+            flex: 1; min-width: 160px; padding: 12px; border: 1px solid #ddd;
+            border-radius: 4px; font-size: 15px;
+        }
+        .import-row button {
+            padding: 12px 24px; background: #27ae60; color: white;
+            border: none; border-radius: 4px; cursor: pointer; font-size: 15px; white-space: nowrap;
+        }
+        .import-row button:hover { background: #219a52; }
+        .import-row button:disabled { background: #95a5a6; cursor: not-allowed; }
+        .import-lookup-btn {
+            padding: 12px 18px; background: #3498db; color: white;
+            border: none; border-radius: 4px; cursor: pointer; font-size: 15px; white-space: nowrap;
+        }
+        .import-lookup-btn:hover { background: #2980b9; }
+        #importStatus {
+            margin-top: 14px; padding: 12px 16px; border-radius: 4px;
+            display: none; font-size: 14px; line-height: 1.5;
+        }
+        #importStatus.success { background: #d5f5e3; color: #1e8449; border: 1px solid #a9dfbf; }
+        #importStatus.error   { background: #fdedec; color: #922b21; border: 1px solid #f1948a; }
+        #importStatus.info    { background: #eaf4fc; color: #1a5276; border: 1px solid #85c1e9; }
+        #pypiVersionSelect { display: none; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 15px; }
+        
         .search-section { 
             margin-bottom: 30px; background: white; padding: 25px; 
             border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
@@ -409,6 +469,19 @@ ENHANCED_INDEX_TEMPLATE = """
             {% endif %}
         </div>
         
+        <div class="import-section">
+            <h3>🌐 Import from PyPI</h3>
+            <p>Look up a package on the official Python Package Index and mirror it here.</p>
+            <div class="import-row">
+                <input type="text" id="importPackageName" placeholder="Package name (e.g. requests)" autocomplete="off">
+                <input type="text" id="importVersion" placeholder="Version (optional)" style="max-width:180px;">
+                <select id="pypiVersionSelect" title="Select version"></select>
+                <button class="import-lookup-btn" onclick="lookupPypiPackage()">🔍 Lookup</button>
+                <button id="importBtn" onclick="importPackage()" disabled>⬇️ Import</button>
+            </div>
+            <div id="importStatus"></div>
+        </div>
+        
         <div class="search-section">
             <h3>🔍 Search Packages</h3>
             <div class="search-box">
@@ -496,6 +569,108 @@ ENHANCED_INDEX_TEMPLATE = """
             if (e.key === 'Enter') {
                 searchPackages();
             }
+        });
+
+        // --- Import from PyPI ---
+        let pypiVersions = [];
+
+        function setImportStatus(msg, type) {
+            const el = document.getElementById('importStatus');
+            el.textContent = msg;
+            el.className = type;
+            el.style.display = msg ? 'block' : 'none';
+        }
+
+        async function lookupPypiPackage() {
+            const name = document.getElementById('importPackageName').value.trim();
+            if (!name) { setImportStatus('Please enter a package name.', 'error'); return; }
+
+            setImportStatus('Looking up package on PyPI…', 'info');
+            document.getElementById('importBtn').disabled = true;
+            document.getElementById('pypiVersionSelect').style.display = 'none';
+            pypiVersions = [];
+
+            try {
+                const version = document.getElementById('importVersion').value.trim();
+                const url = version
+                    ? `/api/pypi-info/${encodeURIComponent(name)}?version=${encodeURIComponent(version)}`
+                    : `/api/pypi-info/${encodeURIComponent(name)}`;
+                const resp = await fetch(url);
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    setImportStatus('Error: ' + (data.error || resp.statusText), 'error');
+                    return;
+                }
+
+                pypiVersions = data.available_versions || [];
+                const select = document.getElementById('pypiVersionSelect');
+                select.innerHTML = '';
+                pypiVersions.forEach(v => {
+                    const opt = document.createElement('option');
+                    opt.value = v;
+                    opt.textContent = v + (v === data.latest_version ? ' (latest)' : '');
+                    select.appendChild(opt);
+                });
+                if (pypiVersions.length > 0) {
+                    select.style.display = 'inline-block';
+                }
+
+                setImportStatus(
+                    `Found: ${data.name} ${data.latest_version}` +
+                    (data.summary ? ` — ${data.summary}` : '') +
+                    `. ${pypiVersions.length} version(s) available.`,
+                    'info'
+                );
+                document.getElementById('importBtn').disabled = false;
+            } catch (err) {
+                setImportStatus('Request failed: ' + err.message, 'error');
+            }
+        }
+
+        async function importPackage() {
+            const name = document.getElementById('importPackageName').value.trim();
+            if (!name) { setImportStatus('Please enter a package name.', 'error'); return; }
+
+            const select = document.getElementById('pypiVersionSelect');
+            const manualVersion = document.getElementById('importVersion').value.trim();
+            const version = (select.style.display !== 'none' && select.value) ? select.value : (manualVersion || null);
+
+            setImportStatus('Downloading from PyPI, please wait…', 'info');
+            document.getElementById('importBtn').disabled = true;
+
+            try {
+                const resp = await fetch('/api/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ package_name: name, version: version })
+                });
+                const data = await resp.json();
+
+                if (!resp.ok || !data.success) {
+                    setImportStatus('Error: ' + (data.error || 'Unknown error'), 'error');
+                    document.getElementById('importBtn').disabled = false;
+                    return;
+                }
+
+                let msg = `✅ Imported ${data.package} ${data.version}. `;
+                if (data.downloaded.length) msg += `Downloaded: ${data.downloaded.join(', ')}. `;
+                if (data.skipped.length)    msg += `Already existed: ${data.skipped.join(', ')}. `;
+                if (data.errors.length)     msg += `Errors: ${data.errors.join('; ')}. `;
+
+                setImportStatus(msg, 'success');
+                document.getElementById('importBtn').disabled = false;
+
+                // Refresh package list after a short delay
+                setTimeout(() => location.reload(), 2000);
+            } catch (err) {
+                setImportStatus('Request failed: ' + err.message, 'error');
+                document.getElementById('importBtn').disabled = false;
+            }
+        }
+
+        document.getElementById('importPackageName').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') lookupPypiPackage();
         });
     </script>
 </body>

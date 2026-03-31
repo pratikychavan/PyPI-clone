@@ -9,10 +9,13 @@ import json
 import hashlib
 import zipfile
 import tarfile
+import requests
 from pathlib import Path
 from datetime import datetime
 from packaging.utils import parse_wheel_filename, parse_sdist_filename
 from packaging.version import parse as parse_version, InvalidVersion
+
+PYPI_JSON_API = "https://pypi.org/pypi"
 
 class PackageManager:
     """Manages packages in the PyPI server"""
@@ -303,4 +306,114 @@ class PackageManager:
             'total_files': total_files,
             'total_size': total_size,
             'total_size_mb': round(total_size / (1024 * 1024), 2)
+        }
+
+    def fetch_pypi_info(self, package_name, version=None):
+        """Fetch package information from official PyPI without downloading."""
+        if version:
+            url = f"{PYPI_JSON_API}/{package_name}/{version}/json"
+        else:
+            url = f"{PYPI_JSON_API}/{package_name}/json"
+
+        resp = requests.get(url, timeout=15)
+        if resp.status_code == 404:
+            raise ValueError(f"Package '{package_name}' not found on PyPI")
+        if resp.status_code != 200:
+            raise ValueError(f"PyPI returned HTTP {resp.status_code} for '{package_name}'")
+
+        data = resp.json()
+        info = data['info']
+        releases = data.get('releases', {})
+
+        available_versions = sorted(
+            releases.keys(),
+            key=lambda v: self._version_key(v),
+            reverse=True
+        )
+
+        return {
+            'name': info['name'],
+            'latest_version': info['version'],
+            'available_versions': available_versions,
+            'summary': info.get('summary', ''),
+            'author': info.get('author', ''),
+            'home_page': info.get('home_page', '') or info.get('project_url', ''),
+            'license': info.get('license', ''),
+        }
+
+    def import_from_pypi(self, package_name, version=None):
+        """Download and store a package from official PyPI."""
+        if version:
+            url = f"{PYPI_JSON_API}/{package_name}/{version}/json"
+        else:
+            url = f"{PYPI_JSON_API}/{package_name}/json"
+
+        resp = requests.get(url, timeout=15)
+        if resp.status_code == 404:
+            raise ValueError(f"Package '{package_name}' not found on PyPI")
+        if resp.status_code != 200:
+            raise ValueError(f"PyPI returned HTTP {resp.status_code} for '{package_name}'")
+
+        data = resp.json()
+        info = data['info']
+        target_version = version or info['version']
+
+        # Version-specific endpoint returns 'urls'; the latest endpoint returns 'releases'
+        if 'urls' in data and version:
+            release_files = data['urls']
+        else:
+            release_files = data.get('releases', {}).get(target_version, [])
+
+        if not release_files:
+            raise ValueError(f"No files available for {package_name}=={target_version} on PyPI")
+
+        downloaded = []
+        skipped = []
+        errors = []
+
+        for release_file in release_files:
+            filename = release_file['filename']
+            if not (filename.endswith('.whl') or filename.endswith('.tar.gz')):
+                continue
+
+            if (self.data_dir / filename).exists():
+                skipped.append(filename)
+                continue
+
+            download_url = release_file['url']
+            try:
+                file_resp = requests.get(download_url, timeout=120, stream=True)
+                if file_resp.status_code != 200:
+                    errors.append(f"{filename}: HTTP {file_resp.status_code}")
+                    continue
+
+                file_data = file_resp.content
+
+                # Verify SHA-256 checksum
+                expected_sha256 = release_file.get('digests', {}).get('sha256', '')
+                if expected_sha256:
+                    actual_sha256 = hashlib.sha256(file_data).hexdigest()
+                    if actual_sha256 != expected_sha256:
+                        errors.append(f"{filename}: checksum mismatch")
+                        continue
+
+                self.store_package(file_data, filename)
+                downloaded.append(filename)
+            except requests.RequestException as exc:
+                errors.append(f"{filename}: {exc}")
+
+        return {
+            'success': True,
+            'package': info['name'],
+            'version': target_version,
+            'downloaded': downloaded,
+            'skipped': skipped,
+            'errors': errors,
+            'info': {
+                'name': info['name'],
+                'version': target_version,
+                'summary': info.get('summary', ''),
+                'author': info.get('author', ''),
+                'home_page': info.get('home_page', '') or info.get('project_url', ''),
+            },
         }
